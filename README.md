@@ -1,6 +1,12 @@
 # whatsapp-container
 
-Run one or more WhatsApp lines as Docker containers. Each container is an independent WhatsApp Web session with a full send/receive API and a browser dashboard.
+A sandboxed way for AI agents to use WhatsApp — either their own dedicated line or their human's account.
+
+Each WhatsApp line runs as an isolated Docker container with a REST API the agent can call to send messages, read conversations, search history, and receive live updates. The human retains full control: they hold the admin password, pair the device, and issue the API token the agent uses. The agent never touches the WhatsApp session directly.
+
+Designed for:
+- **Agent lines** — a dedicated burner number the agent owns and operates autonomously
+- **Human lines** — the human's personal WhatsApp, with the agent acting as a controlled assistant that drafts messages for human approval before sending
 
 **One script gets you from zero to running:**
 
