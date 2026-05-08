@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WA Service</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="conn-dot"></span>
+      <span id="service-name">…</span>
+    </div>
+    <div class="brand-meta">
+      <span id="conn-text">…</span>
+      <span class="sep">·</span>
+      <span id="conn-phone">no phone</span>
+      <span class="sep">·</span>
+      <button id="theme-toggle" class="theme-toggle-btn" title="Toggle light/dark">☀</button>
+    </div>
+  </header>
+  <div class="service-banner" id="service-banner"></div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="connection">Connection</button>
+    <button class="tab" data-tab="send">Send</button>
+    <button class="tab" data-tab="tokens">Tokens</button>
+    <button class="tab" data-tab="messages">Messages</button>
+    <button class="tab" data-tab="search">Search</button>
+    <button class="tab" data-tab="docs">API Docs</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <a href="/chat" target="_blank" class="tab chat-link">Chat ↗</a>
+  </nav>
+
+  <main>
+    <!-- Connection tab -->
+    <section class="panel active" id="tab-connection">
+      <div class="card">
+        <h2>WhatsApp connection</h2>
+        <div class="status-row">
+          <span class="badge" id="conn-badge">unknown</span>
+          <span id="conn-phone-2" class="muted">—</span>
+        </div>
+        <div id="qr-section" class="qr-section">
+          <div id="qr-placeholder" class="muted">Click "Show QR" to start pairing. Each fetch contacts WhatsApp — only do this when you intend to scan.</div>
+        </div>
+        <div class="actions">
+          <button id="refresh-qr">Show QR</button>
+          <button id="refresh-status">Refresh status</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Live events</h3>
+        <ul id="event-log" class="event-log"></ul>
+      </div>
+    </section>
+
+    <!-- Send tab -->
+    <section class="panel" id="tab-send">
+      <div class="card">
+        <h2>Send a message</h2>
+
+        <div class="send-field">
+          <label class="send-label">Token</label>
+          <div class="row">
+            <select id="send-token-select" class="send-token-select"></select>
+            <button id="send-token-refresh" class="icon-btn" title="Refresh tokens">↺</button>
+          </div>
+          <div id="send-token-hint" class="muted send-hint"></div>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">To</label>
+          <input id="send-to" type="text" placeholder="e.g. 05X-XXX-XXXX or +972XXXXXXXXX or 972XXXXXXXXX" class="send-to-input" autocomplete="off" />
+          <div id="send-to-parsed" class="send-parsed muted"></div>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">Message</label>
+          <textarea id="send-body" rows="5" placeholder="Type your message here…" class="send-textarea"></textarea>
+          <div id="send-body-count" class="muted send-hint"></div>
+        </div>
+
+        <div class="actions">
+          <button id="send-draft-btn">Preview draft</button>
+        </div>
+      </div>
+
+      <!-- Draft preview card — hidden until draft created -->
+      <div class="card hidden" id="send-preview-card">
+        <h2>Draft preview</h2>
+        <p class="muted send-hint">This is exactly what will be sent. Confirm or cancel.</p>
+        <div class="draft-bubble">
+          <div class="draft-to-line"><span class="send-label">To:</span> <span id="preview-to" class="mono"></span></div>
+          <div class="draft-body" id="preview-body"></div>
+        </div>
+        <div class="actions">
+          <button id="send-confirm-btn" class="send-confirm">✓ Confirm &amp; Send</button>
+          <button id="send-cancel-btn" class="danger">✗ Cancel draft</button>
+        </div>
+        <div id="send-result" class="send-result hidden"></div>
+      </div>
+    </section>
+
+    <!-- Tokens tab -->
+    <section class="panel" id="tab-tokens">
+      <div class="card">
+        <h2>API tokens</h2>
+        <div class="send-field" style="margin-bottom:0.75rem">
+          <label class="send-label">Admin secret</label>
+          <input id="admin-secret-input" type="password" placeholder="Required to create or revoke tokens" autocomplete="off" />
+        </div>
+        <form id="token-form" class="row">
+          <input id="token-name" name="name" placeholder="Token name (e.g. crm-bot)" required />
+          <label style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap">
+            <input id="token-readonly" type="checkbox" /> Read only
+          </label>
+          <button type="submit">Create token</button>
+        </form>
+        <div id="new-token" class="new-token hidden"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Token</th>
+              <th>Created</th>
+              <th>Scope</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tokens-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Messages tab -->
+    <section class="panel" id="tab-messages">
+      <div class="card">
+        <div class="row spread">
+          <h2>Messages</h2>
+          <div class="row">
+            <select id="status-filter">
+              <option value="">all statuses</option>
+              <option value="pending">pending</option>
+              <option value="sending">sending</option>
+              <option value="sent">sent</option>
+              <option value="failed">failed</option>
+            </select>
+            <button id="refresh-messages">Refresh</button>
+          </div>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>To</th>
+              <th>Body</th>
+              <th>Status</th>
+              <th>Retries</th>
+              <th>Created</th>
+              <th>Sent</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="messages-body"></tbody>
+        </table>
+        <div class="row spread pager">
+          <span id="messages-meta" class="muted"></span>
+          <div class="row">
+            <button id="prev-page">Prev</button>
+            <span id="page-num">1</span>
+            <button id="next-page">Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  <!-- Search tab -->
+  <section class="panel" id="tab-search">
+    <div class="card">
+      <h2>Search incoming messages</h2>
+      <div class="search-grid">
+        <div class="send-field">
+          <label class="send-label">Text</label>
+          <input id="srch-q" type="text" placeholder="keyword or phrase…" autocomplete="off" />
+        </div>
+        <div class="send-field">
+          <label class="send-label">Phone / contact</label>
+          <input id="srch-phone" type="text" placeholder="05X-XXX-XXXX or name" autocomplete="off" />
+        </div>
+        <div class="send-field">
+          <label class="send-label">Chat / group name</label>
+          <input id="srch-chat" type="text" placeholder="partial name…" autocomplete="off" />
+        </div>
+        <div class="send-field">
+          <label class="send-label">Direction</label>
+          <select id="srch-dir">
+            <option value="">all</option>
+            <option value="false">incoming only</option>
+            <option value="true">outgoing only</option>
+          </select>
+        </div>
+        <div class="send-field">
+          <label class="send-label">From date</label>
+          <input id="srch-since" type="date" />
+        </div>
+        <div class="send-field">
+          <label class="send-label">To date</label>
+          <input id="srch-until" type="date" />
+        </div>
+      </div>
+      <div class="actions">
+        <button id="srch-btn">Search</button>
+        <button id="srch-clear" class="secondary">Clear</button>
+        <span id="srch-meta" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card" id="srch-results-card" style="display:none">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Chat</th>
+            <th>From</th>
+            <th>Dir</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="srch-body"></tbody>
+      </table>
+      <div class="row spread pager">
+        <span id="srch-page-meta" class="muted"></span>
+        <div class="row">
+          <button id="srch-prev">Prev</button>
+          <span id="srch-page-num">1</span>
+          <button id="srch-next">Next</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- API Docs tab -->
+  <section class="panel" id="tab-docs">
+    <div class="card">
+      <h2>What this service does</h2>
+      <p class="doc-p">A <strong>send-only WhatsApp gateway</strong>. Authenticated callers POST a recipient and a message body — the service queues it, delivers it via WhatsApp, and retries automatically on failure. This number is dedicated exclusively to outbound messaging.</p>
+    </div>
+
+    <div class="card">
+      <h2>Authentication</h2>
+      <p class="doc-p">Every send request must include a Bearer token in the <code>Authorization</code> header. Create tokens in the <strong>Tokens</strong> tab — one token per calling service is the recommended pattern.</p>
+      <pre class="doc-code">Authorization: Bearer &lt;your-token&gt;</pre>
+    </div>
+
+    <div class="card">
+      <h2>Phone number format</h2>
+      <p class="doc-p">The <code>to</code> field expects <strong>E.164 international format with no <code>+</code> sign and no separators</strong> — just the country code followed by the subscriber number. Drop any leading <code>0</code> from the local format before prepending the country code.</p>
+      <table class="table">
+        <thead><tr><th>Country</th><th>Local format</th><th>Send as <code>to</code></th></tr></thead>
+        <tbody>
+          <tr><td>Israel (+972)</td><td><code>050-123-4567</code> / <code>0501234567</code></td><td><code>972501234567</code></td></tr>
+          <tr><td>USA (+1)</td><td><code>(415) 555-0123</code></td><td><code>14155550123</code></td></tr>
+          <tr><td>UK (+44)</td><td><code>07911 123456</code></td><td><code>447911123456</code></td></tr>
+          <tr><td>Germany (+49)</td><td><code>0151 12345678</code></td><td><code>4915112345678</code></td></tr>
+        </tbody>
+      </table>
+      <p class="doc-p"><strong>Common mistakes:</strong> a leading <code>+</code>, a leading <code>0</code> kept after adding country code, hyphens or spaces, or local-format-only digits without country code — all will fail.</p>
+      <p class="doc-p"><strong>Note on first sends to a number:</strong> WhatsApp requires a one-time identity lookup (<em>usync</em>) for any number not yet seen by this account. If the recipient has never been messaged from this WhatsApp account before, the first send may time out — open a brief chat with them from the linked phone (so the contact syncs), then retry.</p>
+    </div>
+
+    <div class="card">
+      <h2>Endpoints</h2>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method post">POST</span>
+          <code>/api/send</code>
+          <span class="ep-note">Send a WhatsApp message</span>
+        </div>
+        <p class="doc-p">Queues a message for delivery. Returns immediately — delivery happens asynchronously with automatic retry.</p>
+        <div class="doc-label">Request body (JSON)</div>
+        <pre class="doc-code">{
+  "to":   "972501234567",   // phone number (international format, no +)
+  "body": "Hello from the bot"
+}</pre>
+        <div class="doc-label">Success response <span class="doc-status">202</span></div>
+        <pre class="doc-code">{
+  "id":     42,          // message ID — use to track in the Messages tab
+  "status": "queued"
+}</pre>
+        <div class="doc-label">curl</div>
+        <pre class="doc-code">curl -X POST __HOST__/api/send \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"to":"972501234567","body":"Hello"}'</pre>
+        <div class="doc-label">Python</div>
+        <pre class="doc-code">import requests
+
+r = requests.post(
+    "__HOST__/api/send",
+    headers={"Authorization": "Bearer &lt;token&gt;"},
+    json={"to": "972501234567", "body": "Hello"},
+)
+print(r.json())  # {"id": 42, "status": "queued"}</pre>
+        <div class="doc-label">Node.js / fetch</div>
+        <pre class="doc-code">const res = await fetch("__HOST__/api/send", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer &lt;token&gt;",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ to: "972501234567", body: "Hello" }),
+});
+const { id, status } = await res.json();</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/status</code>
+          <span class="ep-note">WhatsApp connection state</span>
+        </div>
+        <p class="doc-p">Returns whether the service is connected to WhatsApp. Messages sent while disconnected are queued and delivered automatically once reconnected.</p>
+        <pre class="doc-code">{
+  "connected": true,
+  "phone": "972501234567"   // or null if not connected
+}</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/health</code>
+          <span class="ep-note">Liveness check</span>
+        </div>
+        <pre class="doc-code">{ "ok": true }</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/messages</code>
+          <span class="ep-note">Outgoing message log</span>
+        </div>
+        <p class="doc-p">Paginated log of all outgoing messages and their delivery status.</p>
+        <div class="doc-label">Query params</div>
+        <pre class="doc-code">?page=1&amp;limit=25&amp;status=sent   // status: pending | sending | sent | failed</pre>
+        <div class="doc-label">Response</div>
+        <pre class="doc-code">{
+  "messages": [
+    {
+      "id":         42,
+      "to_number":  "972501234567",
+      "body":       "Hello",
+      "status":     "sent",       // pending | sending | sent | failed
+      "retries":    0,
+      "max_retries": 3,
+      "created_at": 1745666000000,
+      "sent_at":    1745666003000,
+      "error":      null,
+      "token_id":   "abc-123"
+    }
+  ],
+  "total": 1,
+  "page":  1
+}</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/events</code>
+          <span class="ep-note">Server-Sent Events stream</span>
+        </div>
+        <p class="doc-p">Subscribe to live connection and message status changes. Use this to avoid polling <code>/api/status</code> or <code>/api/messages</code> in hot loops.</p>
+        <div class="doc-label">Events emitted</div>
+        <pre class="doc-code">event: status            // WA connection state changed
+data: {"connected":true,"phone":"972501234567"}
+
+event: connection_lost
+data: {"at":1745666000000}
+
+event: connection_restored
+data: {"phone":"972501234567","at":1745666060000}
+
+event: message_update    // delivery status changed
+data: {"id":42,"status":"sent"}</pre>
+        <div class="doc-label">JavaScript</div>
+        <pre class="doc-code">const es = new EventSource("__HOST__/api/events");
+es.addEventListener("connection_lost", () => console.warn("WA disconnected"));
+es.addEventListener("message_update", (e) => {
+  const { id, status } = JSON.parse(e.data);
+  console.log(`message ${id} → ${status}`);
+});</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Message lifecycle</h2>
+      <p class="doc-p">Every message moves through these states:</p>
+      <div class="lifecycle">
+        <div class="lc-step"><span class="badge status-pending">pending</span> <span class="lc-arrow">→</span> <span class="badge status-sending">sending</span> <span class="lc-arrow">→</span> <span class="badge status-sent">sent</span></div>
+        <div class="lc-step lc-retry">On failure: retried up to 3× with exponential backoff (30 s → 60 s → 120 s), then <span class="badge status-failed">failed</span></div>
+      </div>
+      <p class="doc-p">Messages queued while WhatsApp is disconnected will be delivered automatically once the connection is restored.</p>
+    </div>
+
+    <div class="card">
+      <h2>Phone number format</h2>
+      <p class="doc-p">Pass the international number <strong>without</strong> a leading <code>+</code> and without spaces or dashes. wacli resolves the WhatsApp JID automatically.</p>
+      <pre class="doc-code">✓  972501234567
+✓  14155552671
+✗  +972-50-123-4567
+✗  050-123-4567</pre>
+    </div>
+  </section>
+  <!-- Settings tab -->
+  <section class="panel" id="tab-settings">
+    <div class="card">
+      <h2>Service settings</h2>
+      <div class="send-field" style="margin-bottom:1rem">
+        <label class="send-label">Admin secret (required to save)</label>
+        <input id="settings-secret-input" type="password" placeholder="Admin secret" autocomplete="off" />
+      </div>
+      <div class="card" style="margin-bottom:0;margin-top:4px">
+        <h3>Banner color</h3>
+        <p class="muted" style="margin-bottom:0.75rem;font-size:13px">Pick a color so you can tell the two services apart at a glance.</p>
+        <div id="color-swatches" class="color-swatches"></div>
+      </div>
+      <div class="card" style="margin-bottom:0;margin-top:12px">
+        <h3>Change admin password</h3>
+        <div class="send-field" style="max-width:360px;margin-bottom:0.5rem">
+          <label class="send-label">New password</label>
+          <input id="settings-new-secret" type="password" placeholder="Leave blank to keep current" autocomplete="new-password" />
+        </div>
+        <div class="actions">
+          <button id="settings-save-btn">Save settings</button>
+          <span id="settings-result" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

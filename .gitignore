@@ -1,0 +1,5 @@
+.env
+.accounts
+docker-compose.yml
+docker-compose.yml.backup
+data/

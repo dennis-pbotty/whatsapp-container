@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WA Chat Viewer</title>
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body>
+  <div id="service-banner"></div>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <span>Chats</span>
+        <div class="sidebar-header-actions">
+          <button id="theme-toggle" title="Toggle light/dark mode">☀</button>
+          <a href="/" class="back-link">← Dashboard</a>
+        </div>
+      </div>
+      <div id="chat-search-wrap">
+        <input id="chat-search" type="text" placeholder="Search chats…" autocomplete="off" />
+      </div>
+      <div id="kind-filter">
+        <button class="kind-btn active" data-kind="">All</button>
+        <button class="kind-btn" data-kind="dm">DMs</button>
+        <button class="kind-btn" data-kind="group">Groups</button>
+      </div>
+      <ul id="chat-list"></ul>
+    </aside>
+
+    <main id="main-panel">
+      <div id="empty-state">Select a chat to view messages</div>
+
+      <div id="thread-panel" style="display:none">
+        <div id="thread-header">
+          <div id="thread-title"></div>
+          <div id="thread-meta" class="thread-meta"></div>
+          <div id="thread-search-wrap">
+            <input id="thread-search" type="text" placeholder="Search in chat…" autocomplete="off" />
+            <button id="thread-search-btn">Search</button>
+            <button id="thread-search-clear" style="display:none">✕ Clear</button>
+            <span id="thread-search-meta" class="muted"></span>
+          </div>
+        </div>
+
+        <div id="messages-container">
+          <div id="load-more-wrap" style="display:none">
+            <button id="load-more-btn">Load earlier messages</button>
+          </div>
+          <div id="messages-list"></div>
+        </div>
+
+        <!-- Compose area — only shown when service supports sending -->
+        <div id="compose-wrap" style="display:none">
+          <div id="compose-preview" style="display:none">
+            <div id="compose-preview-body"></div>
+            <div class="compose-preview-actions">
+              <button id="compose-confirm-btn" class="compose-confirm">✓ Confirm &amp; Send</button>
+              <button id="compose-cancel-btn" class="compose-danger">✗ Cancel</button>
+            </div>
+          </div>
+          <div id="compose-bar">
+            <textarea id="compose-text" placeholder="Type a message…" rows="2" dir="auto"></textarea>
+            <button id="compose-send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="lightbox"><img id="lightbox-img" alt="" /></div>
+  <div id="toast" style="display:none"></div>
+
+  <script src="chat.js"></script>
+</body>
+</html>
