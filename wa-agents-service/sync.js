@@ -47,10 +47,17 @@ class SyncManager extends EventEmitter {
       clearTimeout(this._restartTimer);
       this._restartTimer = null;
     }
-    if (this.child) {
-      try { this.child.kill('SIGTERM'); } catch (_) {}
-      this.child = null;
-    }
+    const child = this.child;
+    this.child = null;
+    if (!child) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch (_) {}
+        resolve();
+      }, 5_000);
+      child.once('close', () => { clearTimeout(timer); resolve(); });
+      try { child.kill('SIGTERM'); } catch (_) { clearTimeout(timer); resolve(); }
+    });
   }
 
   _spawn() {

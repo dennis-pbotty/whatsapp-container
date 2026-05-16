@@ -6,8 +6,6 @@ const sync = require('./sync');
 const TICK_MS = 10_000;
 const BATCH_SIZE = 5;
 const BASE_BACKOFF_MS = 30_000;
-// Time to wait after stopping sync before sending, so the store lock is released.
-const SYNC_STOP_WAIT_MS = 1_500;
 
 class MessageQueue extends EventEmitter {
   constructor() {
@@ -39,9 +37,8 @@ class MessageQueue extends EventEmitter {
       if (!due.length) return;
 
       // wacli uses an exclusive store lock — sync holds it while running.
-      // Stop sync, wait for the process to exit and release the lock, then send.
-      sync.stop();
-      await new Promise(r => setTimeout(r, SYNC_STOP_WAIT_MS));
+      // Await sync.stop() so the process fully exits and releases the lock before sending.
+      await sync.stop();
 
       try {
         for (const msg of due) {
