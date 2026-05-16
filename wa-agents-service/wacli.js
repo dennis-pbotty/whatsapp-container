@@ -172,6 +172,26 @@ function extractQR(text) {
   return best.join('\n');
 }
 
+async function sendFile(to, filePath, { caption, filename, mime } = {}) {
+  const args = ['send', 'file', '--to', String(to), '--file', filePath, '--json'];
+  if (caption)  args.push('--caption',  String(caption));
+  if (filename) args.push('--filename', String(filename));
+  if (mime)     args.push('--mime',     String(mime));
+  const res = await runWacli(args, { timeoutMs: 120_000 });
+  const parsed = tryParseJSON(res.stdout);
+  if (parsed && typeof parsed === 'object') {
+    if (parsed.success === false) {
+      const errMsg = typeof parsed.error === 'string'
+        ? parsed.error
+        : (parsed.error && parsed.error.message) || JSON.stringify(parsed.error || {});
+      return { ok: false, error: errMsg };
+    }
+    if (parsed.success === true || res.ok) return { ok: true, data: parsed.data || null };
+  }
+  if (!res.ok) return { ok: false, error: (res.stderr || res.stdout || `exit ${res.code}`).trim() };
+  return { ok: true, data: null };
+}
+
 async function sendMessage(to, body) {
   const res = await runWacli(
     ['send', 'text', '--to', String(to), '--message', String(body), '--json'],
@@ -231,4 +251,4 @@ async function refreshContacts() {
   return runWacli(['contacts', 'refresh', '--json'], { timeoutMs: 30_000 });
 }
 
-module.exports = { checkStatus, getQR, sendMessage, pollConnection, clearQrSession, refreshContacts, WACLI_BIN, storeArgs };
+module.exports = { checkStatus, getQR, sendMessage, sendFile, pollConnection, clearQrSession, refreshContacts, WACLI_BIN, storeArgs };

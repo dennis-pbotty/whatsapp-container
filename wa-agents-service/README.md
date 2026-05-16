@@ -90,13 +90,72 @@ Bearer token:
 - `GET /api/db/groups/:jid/participants`
 - `GET /api/db/chats?q=&kind=&limit=`
 - `GET /api/db/contacts?q=&phone=&limit=`
+- `GET /api/contacts/search?q=&limit=` — contact autocomplete (name, phone, JID, kind)
 - `GET /api/db/messages?...`
 - `PATCH /api/db/messages/:id/read`
 - `GET /api/db/lid-map`
 
+Scheduled messages (write token required for create/update/delete):
+
+- `POST /api/schedule` — schedule a message (multipart/form-data, see below)
+- `GET /api/schedule?status=&page=&limit=` — list scheduled messages
+- `GET /api/schedule/:id` — get single scheduled message
+- `PATCH /api/schedule/:id/disable` — pause (scheduled → disabled)
+- `PATCH /api/schedule/:id/enable` — resume (disabled → scheduled)
+- `DELETE /api/schedule/:id` — delete (only if not yet fired)
+
 Queue list currently remains open for the local admin UI:
 
 - `GET /api/messages?page=&limit=&status=`
+
+## Scheduling messages (agents)
+
+Use `POST /api/schedule` with `multipart/form-data`:
+
+| Field | Required | Notes |
+|---|---|---|
+| `to` | yes | E.164 digits (no +), or a WhatsApp JID |
+| `toLabel` | no | Display name stored for UI only |
+| `sendAt` | yes | Unix ms timestamp (must be in the future) |
+| `body` | if no media | Message text |
+| `recurrence` | no | `daily` / `weekly` / `monthly` / cron string / omit for one-time |
+| `media` | if no body | File field — image, video, audio, or document |
+| `mediaCaption` | no | Caption shown with the media |
+
+```bash
+# One-time text message
+curl -X POST http://localhost:8792/api/schedule \
+  -H "Authorization: Bearer <token>" \
+  -F "to=972501234567" \
+  -F "body=Good morning!" \
+  -F "sendAt=1748000000000"
+
+# Weekly image every Monday 9am (cron: 0 9 * * 1)
+curl -X POST http://localhost:8792/api/schedule \
+  -H "Authorization: Bearer <token>" \
+  -F "to=972501234567" \
+  -F "body=Weekly report" \
+  -F "sendAt=1748005200000" \
+  -F "recurrence=0 9 * * 1" \
+  -F "media=@/path/to/report.pdf"
+```
+
+List and manage:
+
+```bash
+# List all scheduled (default)
+GET /api/schedule
+
+# Only pending
+GET /api/schedule?status=scheduled
+
+# Pause / resume / delete
+PATCH /api/schedule/42/disable
+PATCH /api/schedule/42/enable
+DELETE /api/schedule/42
+```
+
+Statuses: `scheduled` → fires at `send_at` | `disabled` → paused, no sends | `fired` → done (one-time) or last-fired timestamp (recurring).
 
 ## Phone number format
 
@@ -109,8 +168,9 @@ For sending, use E.164 digits only, no plus sign or separators:
 ## Files
 
 - `server.js` — Express API + static UI + SSE.
-- `db.js` — local service SQLite: tokens, queue, drafts, settings, read marks.
-- `queue.js` — background sender.
+- `db.js` — local service SQLite: tokens, queue, drafts, scheduled messages, settings, read marks.
+- `queue.js` — background sender (immediate queue).
+- `scheduler.js` — scheduled message engine (fires every 60s, handles recurrence).
 - `sync.js` — long-running `wacli sync` supervisor.
 - `incoming.js` — incoming message polling.
 - `wacli.js` — wrapper around bundled wacli binary.

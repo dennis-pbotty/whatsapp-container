@@ -70,7 +70,7 @@ See `wa-agents-service/README.md` for the endpoint list.
 These pass from `wa-agents-service/`:
 
 ```bash
-node --check server.js db.js incoming.js media.js queue.js sync.js wacli-db.js wacli.js public/app.js public/chat.js
+node --check server.js db.js incoming.js media.js queue.js scheduler.js sync.js wacli-db.js wacli.js public/app.js public/chat.js
 ```
 
 And from the project root:

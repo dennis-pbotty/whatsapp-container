@@ -61,7 +61,13 @@ class MessageQueue extends EventEmitter {
     db.markSending(msg.id);
     this.emit('message:sending', { id: msg.id });
 
-    const result = await wacli.sendMessage(msg.to_number, msg.body);
+    const result = msg.media_path
+      ? await wacli.sendFile(msg.to_number, msg.media_path, {
+          caption:  msg.media_caption  || undefined,
+          filename: msg.media_filename || undefined,
+          mime:     msg.media_mime     || undefined,
+        })
+      : await wacli.sendMessage(msg.to_number, msg.body);
 
     if (result.ok) {
       db.markSent(msg.id);

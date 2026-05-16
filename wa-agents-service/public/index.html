@@ -25,6 +25,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="connection">Connection</button>
     <button class="tab" data-tab="send">Send</button>
+    <button class="tab" data-tab="schedule">Schedule</button>
     <button class="tab" data-tab="tokens">Tokens</button>
     <button class="tab" data-tab="messages">Messages</button>
     <button class="tab" data-tab="search">Search</button>
@@ -102,6 +103,119 @@
         </div>
         <div id="send-result" class="send-result hidden"></div>
       </div>
+    </section>
+
+    <!-- Schedule tab -->
+    <section class="panel" id="tab-schedule">
+
+      <div class="inner-tabs">
+        <button class="inner-tab active" data-inner="compose">New message</button>
+        <button class="inner-tab" data-inner="queue">Queue</button>
+      </div>
+
+      <!-- Compose inner panel -->
+      <div class="inner-panel active" id="sched-inner-compose">
+      <div class="card">
+
+        <div class="send-field">
+          <label class="send-label">Token</label>
+          <div class="row">
+            <select id="sched-token-select" class="send-token-select"></select>
+            <button id="sched-token-refresh" class="icon-btn" title="Refresh tokens">↺</button>
+          </div>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">To</label>
+          <div class="contact-search-wrap">
+            <input id="sched-to-input" type="text" placeholder="Search name or phone…" class="send-to-input" autocomplete="off" />
+            <div id="sched-contact-dropdown" class="contact-dropdown hidden"></div>
+          </div>
+          <div id="sched-to-hint" class="muted send-hint"></div>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">Message</label>
+          <textarea id="sched-msg" rows="4" placeholder="Type your message… (optional if attaching media)" class="send-textarea"></textarea>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">Send at</label>
+          <div class="row">
+            <input id="sched-date" type="date" style="min-width:0;flex:1" />
+            <input id="sched-time" type="time" style="min-width:0;flex:1" />
+          </div>
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">Repeat</label>
+          <select id="sched-recurrence" style="width:100%;min-width:0">
+            <option value="">Once</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="custom">Custom cron…</option>
+          </select>
+          <input id="sched-cron" type="text" placeholder="e.g. 0 9 * * 1  (Mon 9am)" class="hidden" style="margin-top:8px;width:100%;min-width:0" />
+        </div>
+
+        <div class="send-field">
+          <label class="send-label">Media <span class="sched-optional">(optional)</span></label>
+          <div id="sched-drop-zone" class="sched-drop-zone">
+            <span id="sched-drop-label">📎 Click or drag &amp; drop a file</span>
+            <input id="sched-file-input" type="file" style="display:none" />
+          </div>
+          <div id="sched-file-preview" class="sched-file-preview hidden"></div>
+          <div id="sched-caption-wrap" class="hidden" style="margin-top:8px">
+            <input id="sched-caption" type="text" placeholder="Caption (optional)" style="width:100%;min-width:0" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="sched-submit-btn" class="send-confirm">Schedule</button>
+          <span id="sched-result" class="send-result hidden"></span>
+        </div>
+      </div>
+      </div>
+
+      <!-- Queue inner panel -->
+      <div class="inner-panel" id="sched-inner-queue">
+      <div class="card">
+        <div class="row spread" style="margin-bottom:14px">
+          <div class="sched-chips" id="sched-filter-chips">
+            <button class="chip active" data-status="">All</button>
+            <button class="chip" data-status="scheduled">Scheduled</button>
+            <button class="chip" data-status="disabled">Disabled</button>
+            <button class="chip" data-status="fired">Fired</button>
+          </div>
+          <button id="sched-refresh-btn" class="icon-btn" title="Refresh">↺</button>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="sort-col" data-sort="id">#</th>
+              <th class="sort-col" data-sort="to">To</th>
+              <th>Message / Media</th>
+              <th class="sort-col active-sort" data-sort="send_at">Next send</th>
+              <th>Repeat</th>
+              <th class="sort-col" data-sort="status">Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="sched-queue-body"></tbody>
+        </table>
+        <div class="row spread pager">
+          <span id="sched-meta" class="muted"></span>
+          <div class="row">
+            <button id="sched-prev">Prev</button>
+            <span id="sched-page-num">1</span>
+            <button id="sched-next">Next</button>
+          </div>
+        </div>
+      </div>
+      </div>
+
     </section>
 
     <!-- Tokens tab -->
@@ -247,7 +361,7 @@
   <section class="panel" id="tab-docs">
     <div class="card">
       <h2>What this service does</h2>
-      <p class="doc-p">A <strong>send-only WhatsApp gateway</strong>. Authenticated callers POST a recipient and a message body — the service queues it, delivers it via WhatsApp, and retries automatically on failure. This number is dedicated exclusively to outbound messaging.</p>
+      <p class="doc-p">A <strong>WhatsApp messaging gateway</strong>. Authenticated callers can send messages immediately or schedule them for future delivery — one-time or on a recurring schedule. The service queues, delivers, and retries automatically.</p>
     </div>
 
     <div class="card">
@@ -397,6 +511,167 @@ es.addEventListener("message_update", (e) => {
   console.log(`message ${id} → ${status}`);
 });</pre>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Scheduled messages</h2>
+      <p class="doc-p">Schedule a message to send at a specific time — one-time or on a recurring schedule (daily, weekly, monthly, or any cron expression). Use the <strong>Schedule</strong> tab in the UI, or call the API directly.</p>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method post">POST</span>
+          <code>/api/schedule</code>
+          <span class="ep-note">Schedule a message (text or media)</span>
+        </div>
+        <p class="doc-p">Accepts <code>multipart/form-data</code>. Either <code>body</code> (text) or a <code>media</code> file field is required — both can be sent together.</p>
+        <div class="doc-label">Fields</div>
+        <pre class="doc-code">to            required   Phone in E.164 format (no +) or WhatsApp JID
+sendAt        required   Unix ms timestamp — must be in the future
+body          optional*  Message text (* required if no media file)
+recurrence    optional   daily | weekly | monthly | cron string (e.g. "0 9 * * 1")
+                         Omit for a one-time send
+media         optional*  File upload — image, video, audio, or document (* required if no body)
+mediaCaption  optional   Caption to display with the media
+toLabel       optional   Display name (stored for UI, not sent)</pre>
+        <div class="doc-label">curl — one-time text</div>
+        <pre class="doc-code">curl -X POST __HOST__/api/schedule \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -F "to=972501234567" \
+  -F "body=Reminder: meeting in 1 hour" \
+  -F "sendAt=1748005200000"</pre>
+        <div class="doc-label">curl — weekly image every Monday 9am</div>
+        <pre class="doc-code">curl -X POST __HOST__/api/schedule \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -F "to=972501234567" \
+  -F "body=Weekly report attached" \
+  -F "sendAt=1748005200000" \
+  -F "recurrence=0 9 * * 1" \
+  -F "media=@/path/to/report.pdf"</pre>
+        <div class="doc-label">Success response <span class="doc-status">201</span></div>
+        <pre class="doc-code">{ "id": 7, "status": "scheduled" }</pre>
+        <div class="doc-label">Python</div>
+        <pre class="doc-code">import requests, time
+
+r = requests.post(
+    "__HOST__/api/schedule",
+    headers={"Authorization": "Bearer &lt;token&gt;"},
+    data={
+        "to": "972501234567",
+        "body": "Good morning!",
+        "sendAt": str(int(time.time() + 3600) * 1000),  # 1 hour from now
+        "recurrence": "daily",
+    },
+)
+print(r.json())  # {"id": 7, "status": "scheduled"}</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/schedule</code>
+          <span class="ep-note">List scheduled messages</span>
+        </div>
+        <div class="doc-label">Query params</div>
+        <pre class="doc-code">?status=scheduled   // scheduled | disabled | fired  (omit for all)
+?page=1&amp;limit=25</pre>
+        <div class="doc-label">Response</div>
+        <pre class="doc-code">{
+  "total": 3,
+  "page": 1,
+  "schedules": [
+    {
+      "id":            7,
+      "to_number":     "972501234567",
+      "to_label":      "Gabe P.",
+      "body":          "Good morning!",
+      "media_path":    null,
+      "media_filename": null,
+      "send_at":       1748005200000,
+      "recurrence":    "daily",
+      "status":        "scheduled",   // scheduled | disabled | fired
+      "created_at":    1745666000000,
+      "last_fired_at": null,
+      "last_error":    null
+    }
+  ]
+}</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method patch">PATCH</span>
+          <code>/api/schedule/:id/disable</code>
+          <span class="ep-note">Pause a scheduled message</span>
+        </div>
+        <p class="doc-p">Moves status from <code>scheduled</code> → <code>disabled</code>. No sends will fire while disabled. Use <code>/enable</code> to resume.</p>
+        <pre class="doc-code">curl -X PATCH __HOST__/api/schedule/7/disable \
+  -H "Authorization: Bearer &lt;token&gt;"</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method patch">PATCH</span>
+          <code>/api/schedule/:id/enable</code>
+          <span class="ep-note">Resume a disabled schedule</span>
+        </div>
+        <pre class="doc-code">curl -X PATCH __HOST__/api/schedule/7/enable \
+  -H "Authorization: Bearer &lt;token&gt;"</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method delete">DELETE</span>
+          <code>/api/schedule/:id</code>
+          <span class="ep-note">Delete a scheduled message</span>
+        </div>
+        <p class="doc-p">Permanently deletes the schedule and any attached media file. Only allowed while status is <code>scheduled</code> or <code>disabled</code> — fired messages cannot be deleted.</p>
+        <pre class="doc-code">curl -X DELETE __HOST__/api/schedule/7 \
+  -H "Authorization: Bearer &lt;token&gt;"</pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="method get">GET</span>
+          <code>/api/contacts/search</code>
+          <span class="ep-note">Contact autocomplete</span>
+        </div>
+        <p class="doc-p">Searches the local wacli DB for contacts and chats matching a name or phone number. Useful for resolving a display name to a JID before scheduling.</p>
+        <div class="doc-label">Query params</div>
+        <pre class="doc-code">?q=gabe&amp;limit=15</pre>
+        <div class="doc-label">Response</div>
+        <pre class="doc-code">{
+  "results": [
+    { "jid": "972501234567@s.whatsapp.net", "name": "Gabe P.", "phone": "972501234567", "kind": "contact" },
+    { "jid": "120363000000@g.us",           "name": "Team chat", "phone": "",             "kind": "group"   }
+  ]
+}</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Schedule lifecycle</h2>
+      <p class="doc-p">A scheduled message moves through these states:</p>
+      <div class="lifecycle">
+        <div class="lc-step">
+          <span class="badge status-scheduled">scheduled</span>
+          <span class="lc-arrow">→</span>
+          <span class="badge status-sent">fired</span>
+          <span class="ep-note" style="margin-left:8px">one-time, after send</span>
+        </div>
+        <div class="lc-step">
+          <span class="badge status-scheduled">scheduled</span>
+          <span class="lc-arrow">→</span>
+          <span class="badge status-scheduled">scheduled</span>
+          <span class="ep-note" style="margin-left:8px">recurring — send_at advances to next occurrence</span>
+        </div>
+        <div class="lc-step">
+          <span class="badge status-scheduled">scheduled</span>
+          <span class="lc-arrow">⇌</span>
+          <span class="badge status-disabled">disabled</span>
+          <span class="ep-note" style="margin-left:8px">pause / resume any time</span>
+        </div>
+      </div>
+      <p class="doc-p">The scheduler checks every 60 seconds. Media files are stored in <code>/data/scheduled-media/</code> and deleted automatically when a schedule is deleted.</p>
     </div>
 
     <div class="card">

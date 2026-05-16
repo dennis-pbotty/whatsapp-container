@@ -1,10 +1,13 @@
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
+const multer = require('multer');
 
 const db = require('./db');
 const wacli = require('./wacli');
 const queue = require('./queue');
+const scheduler = require('./scheduler');
 const sync = require('./sync');
 const incoming = require('./incoming');
 const wdb = require('./wacli-db');
@@ -14,6 +17,20 @@ const PORT            = parseInt(process.env.PORT || '8792', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '20000', 10);
 const SERVICE_LABEL   = process.env.SERVICE_LABEL || "Agent's Line";
 const ADMIN_SECRET    = process.env.ADMIN_SECRET  || '';
+
+const SCHEDULED_MEDIA_DIR = process.env.SCHEDULED_MEDIA_DIR || '/data/scheduled-media';
+fs.mkdirSync(SCHEDULED_MEDIA_DIR, { recursive: true });
+
+const schedUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, SCHEDULED_MEDIA_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname) || '';
+      cb(null, `sched-${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`);
+    },
+  }),
+  limits: { fileSize: 64 * 1024 * 1024 },
+});
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -322,6 +339,115 @@ app.get('/api/media/:msgId', async (req, res) => {
   }
 });
 
+// ---------- contact search (autocomplete for schedule UI) ----------
+
+app.get('/api/contacts/search', requireToken, dbGuard, (req, res) => {
+  try {
+    const q = req.query.q ? String(req.query.q) : '';
+    const limit = Math.min(30, Math.max(1, parseInt(req.query.limit || '20', 10) || 20));
+    const contacts = wdb.searchContacts({ q, limit });
+    const chats = wdb.listChats({ q, limit });
+    const results = [];
+    const seen = new Set();
+    for (const c of contacts) {
+      seen.add(c.jid);
+      const name = c.full_name || c.push_name || c.first_name || c.business_name || '';
+      const phone = c.phone || (c.jid.includes('@s.whatsapp.net') ? c.jid.split('@')[0] : '');
+      results.push({ jid: c.jid, name: name || phone, phone, kind: 'contact' });
+    }
+    for (const ch of chats) {
+      if (!seen.has(ch.jid)) {
+        results.push({ jid: ch.jid, name: ch.name || ch.jid, phone: '', kind: ch.kind });
+      }
+    }
+    res.json({ results: results.slice(0, limit) });
+  } catch (err) { handleErr(res, err); }
+});
+
+// ---------- scheduled messages ----------
+
+app.post('/api/schedule', requireWriteToken, schedUpload.single('media'), (req, res) => {
+  const body = req.body || {};
+  const to = (body.to || '').trim();
+  const toLabel = (body.toLabel || '').trim() || null;
+  const msgBody = (body.body || '').trim() || null;
+  const sendAt = parseInt(body.sendAt, 10);
+  const recurrence = (body.recurrence || '').trim() || null;
+  const mediaCaption = (body.mediaCaption || '').trim() || null;
+
+  if (!to) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: 'to required' });
+  }
+  if (!sendAt || sendAt <= Date.now()) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: 'sendAt must be a future Unix ms timestamp' });
+  }
+  if (!msgBody && !req.file) {
+    return res.status(400).json({ error: 'body or media required' });
+  }
+
+  const id = db.createScheduled({
+    toNumber:      to,
+    toLabel,
+    body:          msgBody,
+    mediaPath:     req.file ? req.file.path : null,
+    mediaCaption,
+    mediaFilename: req.file ? req.file.originalname : null,
+    mediaMime:     req.file ? req.file.mimetype : null,
+    sendAt,
+    recurrence,
+    tokenId:       req.tokenId,
+  });
+  logEvent('scheduled created', `id=${id} to=${to} sendAt=${new Date(sendAt).toISOString()} recurrence=${recurrence || 'once'}`);
+  res.status(201).json({ id, status: 'scheduled' });
+});
+
+app.get('/api/schedule', requireToken, (req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  const page   = Math.max(1, parseInt(req.query.page  || '1',  10) || 1);
+  const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10) || 25));
+  res.json(db.listScheduled({ status, page, limit }));
+});
+
+app.get('/api/schedule/:id', requireToken, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  const row = db.getScheduled(id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json(row);
+});
+
+app.patch('/api/schedule/:id/disable', requireWriteToken, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  const ok = db.disableScheduled(id);
+  if (!ok) return res.status(404).json({ error: 'not found or not in scheduled state' });
+  logEvent('scheduled disabled', `id=${id}`);
+  res.json({ ok: true });
+});
+
+app.patch('/api/schedule/:id/enable', requireWriteToken, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  const ok = db.enableScheduled(id);
+  if (!ok) return res.status(404).json({ error: 'not found or not in disabled state' });
+  logEvent('scheduled enabled', `id=${id}`);
+  res.json({ ok: true });
+});
+
+app.delete('/api/schedule/:id', requireWriteToken, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  const row = db.getScheduled(id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const ok = db.deleteScheduled(id);
+  if (!ok) return res.status(409).json({ error: 'cannot delete a fired message' });
+  if (row.media_path) try { fs.unlinkSync(row.media_path); } catch (_) {}
+  logEvent('scheduled deleted', `id=${id}`);
+  res.json({ ok: true });
+});
+
 // ---------- queue messages list ----------
 
 // Delete a pending or failed message from the queue
@@ -362,6 +488,7 @@ queue.on('message:failed', ({ id, error }) => {
 queue.on('error', (err) => logEvent('queue error', err.message));
 
 queue.start();
+scheduler.start();
 sync.start();
 incoming.start();
 
@@ -421,6 +548,7 @@ const server = app.listen(PORT, () => {
 function shutdown() {
   logEvent('shutting down');
   queue.stop();
+  scheduler.stop();
   sync.stop();
   incoming.stop();
   server.close(() => process.exit(0));

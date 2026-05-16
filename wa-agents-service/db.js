@@ -19,6 +19,26 @@ db.exec(`
     readonly INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS scheduled_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    to_number TEXT NOT NULL,
+    to_label TEXT,
+    body TEXT,
+    media_path TEXT,
+    media_caption TEXT,
+    media_filename TEXT,
+    media_mime TEXT,
+    send_at INTEGER NOT NULL,
+    recurrence TEXT,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    token_id TEXT,
+    created_at INTEGER NOT NULL,
+    last_fired_at INTEGER,
+    last_error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_sched_status  ON scheduled_messages(status);
+  CREATE INDEX IF NOT EXISTS idx_sched_send_at ON scheduled_messages(send_at);
+
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     to_number TEXT NOT NULL,
@@ -61,8 +81,12 @@ db.exec(`
   );
 `);
 
-// migrate existing DBs that predate the readonly column
+// migrations
 try { db.exec('ALTER TABLE tokens ADD COLUMN readonly INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE messages ADD COLUMN media_path TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE messages ADD COLUMN media_caption TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE messages ADD COLUMN media_filename TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE messages ADD COLUMN media_mime TEXT'); } catch (_) {}
 
 const stmts = {
   insertToken: db.prepare(
@@ -73,8 +97,8 @@ const stmts = {
   deactivateToken: db.prepare('UPDATE tokens SET active = 0 WHERE id = ?'),
 
   insertMessage: db.prepare(
-    `INSERT INTO messages (to_number, body, status, max_retries, next_retry_at, created_at, token_id)
-     VALUES (?, ?, 'pending', ?, ?, ?, ?)`
+    `INSERT INTO messages (to_number, body, status, max_retries, next_retry_at, created_at, token_id, media_path, media_caption, media_filename, media_mime)
+     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   pickDueMessages: db.prepare(
     `SELECT * FROM messages
@@ -140,8 +164,11 @@ function deactivateToken(id) {
   return stmts.deactivateToken.run(id);
 }
 
-function enqueueMessage({ to, body, tokenId, maxRetries = 3 }) {
-  const info = stmts.insertMessage.run(to, body, maxRetries, Date.now(), Date.now(), tokenId || null);
+function enqueueMessage({ to, body, tokenId, maxRetries = 3, mediaPath, mediaCaption, mediaFilename, mediaMime } = {}) {
+  const info = stmts.insertMessage.run(
+    to, body || '', maxRetries, Date.now(), Date.now(), tokenId || null,
+    mediaPath || null, mediaCaption || null, mediaFilename || null, mediaMime || null
+  );
   return info.lastInsertRowid;
 }
 
@@ -236,6 +263,61 @@ function getReadSet(wacliRowids) {
   return new Set(rows.map(r => r.wacli_rowid));
 }
 
+// ---------- scheduled messages ----------
+
+function createScheduled({ toNumber, toLabel, body, mediaPath, mediaCaption, mediaFilename, mediaMime, sendAt, recurrence, tokenId }) {
+  const info = db.prepare(
+    `INSERT INTO scheduled_messages
+       (to_number, to_label, body, media_path, media_caption, media_filename, media_mime, send_at, recurrence, token_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(toNumber, toLabel || null, body || null, mediaPath || null, mediaCaption || null, mediaFilename || null, mediaMime || null, sendAt, recurrence || null, tokenId || null, Date.now());
+  return info.lastInsertRowid;
+}
+
+function listScheduled({ status = null, page = 1, limit = 25 } = {}) {
+  const lim = Math.min(200, Math.max(1, limit));
+  const off = (Math.max(1, page) - 1) * lim;
+  const total = status
+    ? db.prepare('SELECT COUNT(*) AS n FROM scheduled_messages WHERE status = ?').get(status).n
+    : db.prepare('SELECT COUNT(*) AS n FROM scheduled_messages').get().n;
+  const rows = status
+    ? db.prepare('SELECT * FROM scheduled_messages WHERE status = ? ORDER BY send_at ASC LIMIT ? OFFSET ?').all(status, lim, off)
+    : db.prepare('SELECT * FROM scheduled_messages ORDER BY send_at ASC LIMIT ? OFFSET ?').all(lim, off);
+  return { total, page, limit: lim, schedules: rows };
+}
+
+function getScheduled(id) {
+  return db.prepare('SELECT * FROM scheduled_messages WHERE id = ?').get(id);
+}
+
+function disableScheduled(id) {
+  return db.prepare("UPDATE scheduled_messages SET status = 'disabled' WHERE id = ? AND status = 'scheduled'").run(id).changes > 0;
+}
+
+function enableScheduled(id) {
+  return db.prepare("UPDATE scheduled_messages SET status = 'scheduled' WHERE id = ? AND status = 'disabled'").run(id).changes > 0;
+}
+
+function deleteScheduled(id) {
+  return db.prepare("DELETE FROM scheduled_messages WHERE id = ? AND status != 'fired'").run(id).changes > 0;
+}
+
+function pickDueScheduled(now) {
+  return db.prepare(
+    "SELECT * FROM scheduled_messages WHERE status = 'scheduled' AND send_at <= ? ORDER BY send_at ASC LIMIT 10"
+  ).all(now);
+}
+
+function fireScheduled(id, nextSendAt, error) {
+  if (nextSendAt) {
+    db.prepare('UPDATE scheduled_messages SET send_at = ?, last_fired_at = ?, last_error = ? WHERE id = ?')
+      .run(nextSendAt, Date.now(), error || null, id);
+  } else {
+    db.prepare("UPDATE scheduled_messages SET status = 'fired', last_fired_at = ?, last_error = ? WHERE id = ?")
+      .run(Date.now(), error || null, id);
+  }
+}
+
 module.exports = {
   db,
   createToken,
@@ -262,4 +344,12 @@ module.exports = {
   getReadSet,
   getSetting,
   setSetting,
+  createScheduled,
+  listScheduled,
+  getScheduled,
+  disableScheduled,
+  enableScheduled,
+  deleteScheduled,
+  pickDueScheduled,
+  fireScheduled,
 };

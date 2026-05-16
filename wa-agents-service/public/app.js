@@ -5,10 +5,11 @@ const panels = document.querySelectorAll('.panel');
 function activateTab(name) {
   tabs.forEach(x => x.classList.toggle('active', x.dataset.tab === name));
   panels.forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
-  if (name === 'tokens') loadTokens();
+  if (name === 'tokens')   loadTokens();
   if (name === 'messages') loadMessages();
-  if (name === 'send') loadSendTokens();
-  if (name === 'search') loadSearchToken();
+  if (name === 'send')     loadSendTokens();
+  if (name === 'search')   loadSearchToken();
+  if (name === 'schedule') { loadSchedTokens(); loadScheduled(); }
 }
 
 tabs.forEach((t) => {
@@ -41,7 +42,7 @@ function restoreFromHash() {
   const qi       = raw.indexOf('?');
   const tabName  = qi >= 0 ? raw.slice(0, qi) : raw;
   const queryStr = qi >= 0 ? raw.slice(qi + 1) : '';
-  const valid    = ['connection', 'send', 'tokens', 'messages', 'search', 'docs', 'settings'];
+  const valid    = ['connection', 'send', 'schedule', 'tokens', 'messages', 'search', 'docs', 'settings'];
   activateTab(valid.includes(tabName) ? tabName : 'connection');
   if (tabName === 'search' && queryStr) {
     const p = new URLSearchParams(queryStr);
@@ -687,6 +688,461 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// ---------- schedule tab ----------
+
+let schedTokens = [];
+let schedPage = 1;
+const schedLimit = 25;
+let schedStatus = '';
+let schedSelectedContact = null; // { jid, name, phone, kind }
+let schedFile = null;
+let schedSortBy  = 'send_at';
+let schedSortDir = 'asc';
+
+async function loadSchedTokens() {
+  try {
+    const res = await fetch('/api/tokens');
+    const data = await res.json();
+    schedTokens = (data.tokens || []).filter(t => t.active && !t.readonly);
+    const sel = document.getElementById('sched-token-select');
+    sel.innerHTML = '';
+    if (!schedTokens.length) {
+      sel.innerHTML = '<option value="">No write tokens — create one in Tokens tab</option>';
+      return;
+    }
+    for (const t of schedTokens) {
+      const opt = document.createElement('option');
+      opt.value = t.token;
+      opt.textContent = t.name + '  (' + maskToken(t.token) + ')';
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('loadSchedTokens', e);
+  }
+}
+
+function getSchedToken() {
+  return document.getElementById('sched-token-select').value || null;
+}
+
+// Contact autocomplete
+let contactDebounce = null;
+
+function bindContactSearch() {
+  const input = document.getElementById('sched-to-input');
+  const dropdown = document.getElementById('sched-contact-dropdown');
+  const hint = document.getElementById('sched-to-hint');
+
+  input.addEventListener('input', () => {
+    schedSelectedContact = null;
+    hint.textContent = '';
+    clearTimeout(contactDebounce);
+    const q = input.value.trim();
+    if (q.length < 2) { dropdown.classList.add('hidden'); return; }
+    contactDebounce = setTimeout(() => searchContacts(q), 300);
+  });
+
+  input.addEventListener('blur', () => {
+    // delay so click on dropdown option fires first
+    setTimeout(() => {
+      if (!schedSelectedContact) {
+        // allow raw phone entry
+        const raw = input.value.trim();
+        if (raw) {
+          schedSelectedContact = { jid: parsePhone(raw), name: raw, phone: parsePhone(raw), kind: 'raw' };
+          hint.textContent = '→ ' + schedSelectedContact.jid;
+        }
+      }
+      dropdown.classList.add('hidden');
+    }, 200);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!document.getElementById('sched-to-input').contains(e.target) &&
+        !dropdown.contains(e.target)) {
+      dropdown.classList.add('hidden');
+    }
+  });
+}
+
+async function searchContacts(q) {
+  const token = getSchedToken();
+  if (!token) return;
+  const dropdown = document.getElementById('sched-contact-dropdown');
+  try {
+    const res = await fetch('/api/contacts/search?q=' + encodeURIComponent(q) + '&limit=15', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!res.ok) { dropdown.classList.add('hidden'); return; }
+    const data = await res.json();
+    renderContactDropdown(data.results || []);
+  } catch (_) { dropdown.classList.add('hidden'); }
+}
+
+function renderContactDropdown(results) {
+  const dropdown = document.getElementById('sched-contact-dropdown');
+  dropdown.innerHTML = '';
+  if (!results.length) { dropdown.classList.add('hidden'); return; }
+  for (const r of results) {
+    const div = document.createElement('div');
+    div.className = 'contact-option';
+    const icon = r.kind === 'group' ? '👥' : '👤';
+    const sub = r.phone ? r.phone : r.jid.split('@')[0];
+    div.innerHTML = `<span class="contact-icon">${icon}</span>
+      <span class="contact-name">${escapeHtml(r.name)}</span>
+      <span class="contact-phone">${escapeHtml(sub)}</span>`;
+    div.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      selectContact(r);
+    });
+    dropdown.appendChild(div);
+  }
+  dropdown.classList.remove('hidden');
+}
+
+function selectContact(r) {
+  schedSelectedContact = r;
+  document.getElementById('sched-to-input').value = r.name + (r.phone ? ' · ' + r.phone : '');
+  document.getElementById('sched-to-hint').textContent = '→ ' + (r.phone || r.jid);
+  document.getElementById('sched-contact-dropdown').classList.add('hidden');
+}
+
+// Media upload / drag-drop
+function bindMediaUpload() {
+  const zone = document.getElementById('sched-drop-zone');
+  const fileInput = document.getElementById('sched-file-input');
+  const preview = document.getElementById('sched-file-preview');
+  const captionWrap = document.getElementById('sched-caption-wrap');
+
+  zone.addEventListener('click', () => fileInput.click());
+
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f) setMediaFile(f);
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setMediaFile(fileInput.files[0]);
+  });
+
+  function setMediaFile(f) {
+    schedFile = f;
+    const label = document.getElementById('sched-drop-label');
+    label.textContent = '';
+    preview.classList.remove('hidden');
+    captionWrap.classList.remove('hidden');
+
+    if (f.type.startsWith('image/')) {
+      const url = URL.createObjectURL(f);
+      preview.innerHTML = `<img src="${url}" class="sched-preview-img" /><span>${escapeHtml(f.name)}</span>
+        <button class="sched-remove-file danger" type="button">✕</button>`;
+    } else {
+      const icon = f.type.startsWith('video/') ? '🎬' : f.type.startsWith('audio/') ? '🎵' : '📄';
+      preview.innerHTML = `<span class="sched-file-icon">${icon}</span><span>${escapeHtml(f.name)}</span>
+        <span class="muted" style="font-size:12px">${(f.size / 1024).toFixed(0)} KB</span>
+        <button class="sched-remove-file danger" type="button">✕</button>`;
+    }
+
+    preview.querySelector('.sched-remove-file').addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearMediaFile();
+    });
+  }
+
+  function clearMediaFile() {
+    schedFile = null;
+    fileInput.value = '';
+    preview.innerHTML = '';
+    preview.classList.add('hidden');
+    captionWrap.classList.add('hidden');
+    document.getElementById('sched-drop-label').textContent = '📎 Click or drag & drop a file';
+  }
+}
+
+// Recurrence toggle
+function bindRecurrence() {
+  const sel = document.getElementById('sched-recurrence');
+  const cronInput = document.getElementById('sched-cron');
+  sel.addEventListener('change', () => {
+    cronInput.classList.toggle('hidden', sel.value !== 'custom');
+  });
+}
+
+// Schedule form submit
+async function submitSchedule() {
+  const token = getSchedToken();
+  if (!token) { alert('Select a token first.'); return; }
+
+  const dateVal = document.getElementById('sched-date').value;
+  const timeVal = document.getElementById('sched-time').value;
+  if (!dateVal || !timeVal) { alert('Select send date and time.'); return; }
+  const sendAt = new Date(dateVal + 'T' + timeVal).getTime();
+  if (!sendAt || sendAt <= Date.now()) { alert('Send time must be in the future.'); return; }
+
+  if (!schedSelectedContact) { alert('Select a contact or enter a phone number.'); return; }
+  const to = schedSelectedContact.phone || schedSelectedContact.jid;
+  const toLabel = schedSelectedContact.name || '';
+
+  const body = document.getElementById('sched-msg').value.trim();
+  if (!body && !schedFile) { alert('Enter a message or attach media.'); return; }
+
+  let recurrence = document.getElementById('sched-recurrence').value;
+  if (recurrence === 'custom') {
+    recurrence = document.getElementById('sched-cron').value.trim();
+    if (!recurrence) { alert('Enter a cron expression for custom repeat.'); return; }
+  }
+
+  const btn = document.getElementById('sched-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Scheduling…';
+  const resultEl = document.getElementById('sched-result');
+  resultEl.className = 'send-result hidden';
+
+  try {
+    const fd = new FormData();
+    fd.append('to', to);
+    fd.append('toLabel', toLabel);
+    fd.append('sendAt', String(sendAt));
+    if (body) fd.append('body', body);
+    if (recurrence) fd.append('recurrence', recurrence);
+    if (schedFile) {
+      fd.append('media', schedFile);
+      const caption = document.getElementById('sched-caption').value.trim();
+      if (caption) fd.append('mediaCaption', caption);
+    }
+
+    const res = await fetch('/api/schedule', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      resultEl.className = 'send-result err';
+      resultEl.textContent = '✗ ' + (data.error || res.status);
+      resultEl.classList.remove('hidden');
+      return;
+    }
+    resultEl.className = 'send-result ok';
+    resultEl.textContent = '✓ Scheduled as #' + data.id;
+    resultEl.classList.remove('hidden');
+    // reset form
+    document.getElementById('sched-to-input').value = '';
+    document.getElementById('sched-to-hint').textContent = '';
+    document.getElementById('sched-msg').value = '';
+    document.getElementById('sched-date').value = '';
+    document.getElementById('sched-time').value = '';
+    document.getElementById('sched-recurrence').value = '';
+    document.getElementById('sched-cron').classList.add('hidden');
+    document.getElementById('sched-caption').value = '';
+    schedSelectedContact = null;
+    schedFile = null;
+    document.getElementById('sched-file-preview').innerHTML = '';
+    document.getElementById('sched-file-preview').classList.add('hidden');
+    document.getElementById('sched-caption-wrap').classList.add('hidden');
+    document.getElementById('sched-drop-label').textContent = '📎 Click or drag & drop a file';
+    document.getElementById('sched-file-input').value = '';
+    setTimeout(() => { resultEl.classList.add('hidden'); activateInnerTab('queue'); }, 1500);
+    schedPage = 1;
+  } catch (e) {
+    resultEl.className = 'send-result err';
+    resultEl.textContent = '✗ ' + e.message;
+    resultEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Schedule';
+  }
+}
+
+// Schedule queue
+function schedStatusBadge(status) {
+  const map = {
+    scheduled: 'blue',
+    disabled:  '',
+    fired:     'green',
+    failed:    'red',
+  };
+  return `<span class="badge ${map[status] || ''}">${status}</span>`;
+}
+
+function fmtRecurrence(r) {
+  if (!r) return 'Once';
+  const map = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
+  return map[r] || `<code style="font-size:11px">${escapeHtml(r)}</code>`;
+}
+
+async function loadScheduled() {
+  const token = getSchedToken();
+  if (!token) return;
+  const statusQ = schedStatus ? `&status=${schedStatus}` : '';
+  try {
+    const res = await fetch(`/api/schedule?page=${schedPage}&limit=${schedLimit}${statusQ}`, {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderScheduled(data);
+  } catch (_) {}
+}
+
+function sortSchedules(rows) {
+  return [...rows].sort((a, b) => {
+    let av, bv;
+    if (schedSortBy === 'send_at') {
+      av = a.send_at || 0; bv = b.send_at || 0;
+    } else if (schedSortBy === 'status') {
+      av = a.status || ''; bv = b.status || '';
+    } else if (schedSortBy === 'to') {
+      av = (a.to_label || a.to_number || '').toLowerCase();
+      bv = (b.to_label || b.to_number || '').toLowerCase();
+    } else {
+      av = a.id; bv = b.id;
+    }
+    if (av < bv) return schedSortDir === 'asc' ? -1 : 1;
+    if (av > bv) return schedSortDir === 'asc' ?  1 : -1;
+    return 0;
+  });
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('#sched-inner-queue .sort-col').forEach(th => {
+    const isActive = th.dataset.sort === schedSortBy;
+    th.classList.toggle('active-sort', isActive);
+    const arrow = isActive ? (schedSortDir === 'asc' ? ' ↑' : ' ↓') : '';
+    th.textContent = th.dataset.sort === 'id'      ? '#'
+                   : th.dataset.sort === 'to'      ? 'To'
+                   : th.dataset.sort === 'send_at' ? 'Next send'
+                   : th.dataset.sort === 'status'  ? 'Status'
+                   : th.dataset.sort;
+    th.textContent += arrow;
+  });
+}
+
+function renderScheduled(data) {
+  updateSortHeaders();
+  const body = document.getElementById('sched-queue-body');
+  body.innerHTML = '';
+  const sorted = sortSchedules(data.schedules || []);
+  for (const s of sorted) {
+    const displayTo = escapeHtml(s.to_label || s.to_number);
+    const phoneHint = s.to_label ? `<span class="muted" style="font-size:11px">${escapeHtml(s.to_number)}</span>` : '';
+    const msgPreview = s.media_path
+      ? `📎 ${escapeHtml(s.media_filename || 'file')}${s.body ? ' · ' + escapeHtml(truncate(s.body, 30)) : ''}`
+      : escapeHtml(truncate(s.body || '', 60));
+    const nextSend = s.status === 'fired' ? '—' : fmtDate(s.send_at);
+    const canAct = s.status !== 'fired';
+    const disableBtn = s.status === 'scheduled'
+      ? `<button class="sched-disable-btn secondary" data-id="${s.id}" title="Disable — pauses this schedule">Pause</button>`
+      : '';
+    const enableBtn = s.status === 'disabled'
+      ? `<button class="sched-enable-btn" data-id="${s.id}" title="Re-enable this schedule">Enable</button>`
+      : '';
+    const deleteBtn = canAct
+      ? `<button class="sched-delete-btn danger" data-id="${s.id}" title="Delete permanently">✕</button>`
+      : '';
+
+    const tr = document.createElement('tr');
+    if (s.status === 'disabled') tr.style.opacity = '0.6';
+    tr.innerHTML = `
+      <td class="mono">${s.id}</td>
+      <td>${displayTo}${phoneHint ? '<br>' + phoneHint : ''}</td>
+      <td class="body-cell" title="${escapeHtml(s.body || '')}">${msgPreview}</td>
+      <td class="nowrap">${nextSend}</td>
+      <td>${fmtRecurrence(s.recurrence)}</td>
+      <td>${schedStatusBadge(s.status)}</td>
+      <td class="row" style="gap:4px;flex-wrap:nowrap">${disableBtn}${enableBtn}${deleteBtn}</td>
+    `;
+    body.appendChild(tr);
+  }
+
+  body.querySelectorAll('.sched-disable-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const token = getSchedToken();
+      await fetch('/api/schedule/' + btn.dataset.id + '/disable', {
+        method: 'PATCH', headers: { 'Authorization': 'Bearer ' + token },
+      });
+      loadScheduled();
+    });
+  });
+  body.querySelectorAll('.sched-enable-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const token = getSchedToken();
+      await fetch('/api/schedule/' + btn.dataset.id + '/enable', {
+        method: 'PATCH', headers: { 'Authorization': 'Bearer ' + token },
+      });
+      loadScheduled();
+    });
+  });
+  body.querySelectorAll('.sched-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Delete scheduled message #${btn.dataset.id}?`)) return;
+      const token = getSchedToken();
+      const r = await fetch('/api/schedule/' + btn.dataset.id, {
+        method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token },
+      });
+      if (!r.ok) { const d = await r.json(); alert('Error: ' + (d.error || r.status)); return; }
+      loadScheduled();
+    });
+  });
+
+  const total = data.total || 0;
+  document.getElementById('sched-meta').textContent = `${total} total · page ${schedPage}`;
+  document.getElementById('sched-page-num').textContent = String(schedPage);
+}
+
+// Inner tab switching for Schedule panel
+function activateInnerTab(name) {
+  document.querySelectorAll('#tab-schedule .inner-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.inner === name);
+  });
+  document.querySelectorAll('#tab-schedule .inner-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'sched-inner-' + name);
+  });
+  if (name === 'queue') loadScheduled();
+}
+
+document.querySelectorAll('#tab-schedule .inner-tab').forEach(t => {
+  t.addEventListener('click', () => activateInnerTab(t.dataset.inner));
+});
+
+// Wire up schedule tab events
+document.getElementById('sched-token-refresh').addEventListener('click', loadSchedTokens);
+document.getElementById('sched-submit-btn').addEventListener('click', submitSchedule);
+document.getElementById('sched-refresh-btn').addEventListener('click', () => { schedPage = 1; loadScheduled(); });
+document.getElementById('sched-prev').addEventListener('click', () => { if (schedPage > 1) { schedPage--; loadScheduled(); } });
+document.getElementById('sched-next').addEventListener('click', () => { schedPage++; loadScheduled(); });
+
+document.querySelector('#sched-inner-queue thead').addEventListener('click', (e) => {
+  const th = e.target.closest('.sort-col');
+  if (!th) return;
+  const col = th.dataset.sort;
+  if (col === schedSortBy) {
+    schedSortDir = schedSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    schedSortBy = col;
+    schedSortDir = col === 'send_at' ? 'asc' : 'asc';
+  }
+  // re-render with current data (re-fetch to keep it simple)
+  loadScheduled();
+});
+
+document.getElementById('sched-filter-chips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  document.querySelectorAll('#sched-filter-chips .chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  schedStatus = chip.dataset.status;
+  schedPage = 1;
+  loadScheduled();
+});
+
 // ---------- docs host injection ----------
 // Replace __HOST__ placeholders in the API docs with the actual origin
 // so the examples work regardless of what hostname/proxy is in front.
@@ -711,6 +1167,9 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 });
 
 // ---------- boot ----------
+bindContactSearch();
+bindMediaUpload();
+bindRecurrence();
 applyTheme(localStorage.getItem('wa-theme') || 'dark');
 initServiceInfo();
 injectDocsHost();
