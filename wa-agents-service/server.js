@@ -346,18 +346,27 @@ app.get('/api/contacts/search', requireToken, dbGuard, (req, res) => {
     const q = req.query.q ? String(req.query.q) : '';
     const limit = Math.min(30, Math.max(1, parseInt(req.query.limit || '20', 10) || 20));
     const contacts = wdb.searchContacts({ q, limit });
-    const chats = wdb.listChats({ q, limit });
-    const results = [];
-    const seen = new Set();
+    const chats    = wdb.listChats({ q, limit });
+    const groups   = wdb.listGroups({ q, limit });
+    const results  = [];
+    const seen     = new Set();
     for (const c of contacts) {
       seen.add(c.jid);
-      const name = c.full_name || c.push_name || c.first_name || c.business_name || '';
+      const name  = c.full_name || c.push_name || c.first_name || c.business_name || '';
       const phone = c.phone || (c.jid.includes('@s.whatsapp.net') ? c.jid.split('@')[0] : '');
       results.push({ jid: c.jid, name: name || phone, phone, kind: 'contact' });
     }
     for (const ch of chats) {
       if (!seen.has(ch.jid)) {
+        seen.add(ch.jid);
         results.push({ jid: ch.jid, name: ch.name || ch.jid, phone: '', kind: ch.kind });
+      }
+    }
+    // listGroups queries the groups table directly — catches groups whose chat name is null
+    for (const g of groups) {
+      if (!seen.has(g.jid)) {
+        seen.add(g.jid);
+        results.push({ jid: g.jid, name: g.name || g.jid, phone: '', kind: 'group' });
       }
     }
     res.json({ results: results.slice(0, limit) });
