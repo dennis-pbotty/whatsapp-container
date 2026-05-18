@@ -3,7 +3,11 @@ const { EventEmitter } = require('events');
 
 const { WACLI_BIN, storeArgs } = require('./wacli');
 
-const RESTART_DELAY_MS = 10_000;
+const BASE_RESTART_MS  = 10_000;   // first retry after 10s
+const MAX_RESTART_MS   = 300_000;  // cap at 5 minutes
+// If sync stays alive at least this long, reset the backoff counter.
+const STABLE_UPTIME_MS = 60_000;
+
 // Lines containing any of these substrings count as "activity" — used to mark
 // the process as alive and emit periodic synced events.
 const ACTIVITY_PATTERNS = [
@@ -24,6 +28,8 @@ class SyncManager extends EventEmitter {
     this.stopped = false;
     this.lastActivity = null;
     this._restartTimer = null;
+    this._consecutiveFailures = 0;
+    this._spawnedAt = null;
   }
 
   status() {
@@ -61,7 +67,7 @@ class SyncManager extends EventEmitter {
   }
 
   _spawn() {
-    const args = [...storeArgs(), 'sync', '--follow', '--refresh-contacts'];
+    const args = [...storeArgs(), 'sync', '--follow', '--refresh-contacts', '--refresh-groups'];
     let child;
     try {
       child = spawn(WACLI_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -71,6 +77,7 @@ class SyncManager extends EventEmitter {
       return;
     }
     this.child = child;
+    this._spawnedAt = Date.now();
     this.emit('connected', { pid: child.pid });
 
     const onLine = (line) => {
@@ -102,7 +109,13 @@ class SyncManager extends EventEmitter {
     });
 
     child.on('close', (code, signal) => {
+      const uptime = this._spawnedAt ? Date.now() - this._spawnedAt : 0;
       this.child = null;
+      this._spawnedAt = null;
+      // Reset backoff if the process was stable for long enough before exiting.
+      if (uptime >= STABLE_UPTIME_MS) {
+        this._consecutiveFailures = 0;
+      }
       this.emit('error', new Error(`sync exited (code=${code} signal=${signal})`));
       if (!this.stopped) {
         this._scheduleRestart();
@@ -114,11 +127,14 @@ class SyncManager extends EventEmitter {
     if (this.stopped) return;
     if (this._restartTimer) return;
     this.restarts += 1;
-    this.emit('reconnecting', { in: RESTART_DELAY_MS, restarts: this.restarts });
+    this._consecutiveFailures += 1;
+    // Exponential backoff: 10s → 20s → 40s → … capped at 5 min.
+    const delay = Math.min(BASE_RESTART_MS * Math.pow(2, this._consecutiveFailures - 1), MAX_RESTART_MS);
+    this.emit('reconnecting', { in: delay, restarts: this.restarts });
     this._restartTimer = setTimeout(() => {
       this._restartTimer = null;
       if (!this.stopped) this._spawn();
-    }, RESTART_DELAY_MS);
+    }, delay);
   }
 }
 
